@@ -5,7 +5,8 @@ const QRCode = require("qrcode");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
-  DisconnectReason
+  DisconnectReason,
+  fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 
 const app = express();
@@ -14,186 +15,131 @@ app.use(cors());
 app.use(express.json());
 
 let qrGlobal = null;
-let statusGlobal = "offline";
+let statusGlobal = "iniciando";
 let sock = null;
 
-// =========================
+// =====================================
 // INICIAR WHATSAPP
-// =========================
+// =====================================
 
 async function startWhatsApp() {
 
-  const { state, saveCreds } =
-    await useMultiFileAuthState("auth");
+  try {
 
-  sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true
-  });
+    console.log("INICIANDO ENGINE...");
 
-  // EVENTOS CONEXÃO
-  sock.ev.on("connection.update", async (update) => {
+    const { state, saveCreds } =
+      await useMultiFileAuthState("./auth");
 
-    const {
-      connection,
-      qr,
-      lastDisconnect
-    } = update;
+    // PEGA VERSÃO MAIS RECENTE
+    const { version } =
+      await fetchLatestBaileysVersion();
 
-    // QR CODE
-    if (qr) {
+    console.log("VERSÃO WHATSAPP:", version);
 
-      qrGlobal = await QRCode.toDataURL(qr);
+    sock = makeWASocket({
 
-      console.log("QR CODE GERADO");
+      version,
 
-    }
+      auth: state,
 
-    // CONECTADO
-    if (connection === "open") {
+      printQRInTerminal: true,
 
-      statusGlobal = "online";
+      browser: [
+        "ZapBridge",
+        "Chrome",
+        "1.0.0"
+      ]
 
-      console.log("WHATSAPP CONECTADO");
+    });
 
-    }
+    // =====================================
+    // EVENTOS CONEXÃO
+    // =====================================
 
-    // DESCONECTOU
-    if (connection === "close") {
+    sock.ev.on("connection.update", async (update) => {
 
-      statusGlobal = "offline";
+      const {
+        connection,
+        lastDisconnect,
+        qr
+      } = update;
 
-      console.log("WHATSAPP DESCONECTADO");
+      console.log("UPDATE:", update);
 
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !==
-        DisconnectReason.loggedOut;
+      // QR GERADO
+      if (qr) {
 
-      if (shouldReconnect) {
+        console.log("QR RECEBIDO");
 
-        startWhatsApp();
+        qrGlobal =
+          await QRCode.toDataURL(qr);
+
+        statusGlobal = "aguardando_qr";
 
       }
 
-    }
+      // CONECTADO
+      if (connection === "open") {
 
-  });
+        console.log("WHATSAPP CONECTADO");
 
-  // SALVAR SESSÃO
-  sock.ev.on("creds.update", saveCreds);
+        statusGlobal = "online";
 
-  // RECEBER MENSAGENS
-  sock.ev.on("messages.upsert", async ({ messages }) => {
+        qrGlobal = null;
 
-    const msg = messages[0];
+      }
 
-    if (!msg.message) return;
+      // DESCONECTOU
+      if (connection === "close") {
 
-    const numero =
-      msg.key.remoteJid;
+        console.log("CONEXÃO FECHADA");
 
-    const texto =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      "";
+        statusGlobal = "offline";
 
-    console.log("NOVA MENSAGEM");
-    console.log(numero);
-    console.log(texto);
+        const shouldReconnect =
+          lastDisconnect?.error?.output?.statusCode !==
+          DisconnectReason.loggedOut;
 
-  });
+        if (shouldReconnect) {
 
-}
+          console.log("RECONECTANDO...");
 
-// INICIAR ENGINE
-startWhatsApp();
+          startWhatsApp();
 
-// =========================
-// ROTA STATUS
-// =========================
+        }
 
-app.get("/", (req, res) => {
+      }
 
-  res.send("ZapBridge Engine Online");
-
-});
-
-// =========================
-// QR CODE
-// =========================
-
-app.get("/qr", async (req, res) => {
-
-  res.json({
-    status: statusGlobal,
-    qr: qrGlobal
-  });
-
-});
-
-// =========================
-// STATUS API
-// =========================
-
-app.get("/status", (req, res) => {
-
-  res.json({
-    status: statusGlobal
-  });
-
-});
-
-// =========================
-// ENVIAR MENSAGEM
-// =========================
-
-app.post("/send", async (req, res) => {
-
-  try {
-
-    const { number, message } = req.body;
-
-    if (!number || !message) {
-
-      return res.status(400).json({
-        error: "Número e mensagem obrigatórios"
-      });
-
-    }
-
-    const numeroFormatado =
-      number.replace(/\D/g, "") + "@s.whatsapp.net";
-
-    await sock.sendMessage(numeroFormatado, {
-      text: message
     });
 
-    res.json({
-      status: "ok",
-      enviado: true
+    // SALVAR SESSÃO
+    sock.ev.on("creds.update", saveCreds);
+
+    // =====================================
+    // RECEBER MENSAGENS
+    // =====================================
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+
+      const msg = messages[0];
+
+      if (!msg.message) return;
+
+      const numero =
+        msg.key.remoteJid;
+
+      const texto =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        "";
+
+      console.log("NOVA MENSAGEM");
+      console.log(numero);
+      console.log(texto);
+
     });
 
   } catch (err) {
 
-    console.log(err);
-
-    res.status(500).json({
-      status: "erro",
-      detalhes: err.message
-    });
-
-  }
-
-});
-
-// =========================
-// PORTA
-// =========================
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-
-  console.log(`ZapBridge Engine rodando na porta ${PORT}`);
-
-});
+    console.log("ERRO
