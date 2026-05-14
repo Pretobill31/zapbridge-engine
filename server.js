@@ -67,7 +67,10 @@ async function startWhatsApp() {
 
       console.log("UPDATE:", connection);
 
+      // ======================================
       // QR GERADO
+      // ======================================
+
       if (qr) {
 
         console.log("✅ QR RECEBIDO");
@@ -79,23 +82,29 @@ async function startWhatsApp() {
 
       }
 
+      // ======================================
       // CONECTADO
+      // ======================================
+
       if (connection === "open") {
 
         console.log("✅ WHATSAPP CONECTADO");
 
-        statusGlobal = "online";
+        statusGlobal = "connected";
 
         qrGlobal = null;
 
       }
 
+      // ======================================
       // DESCONECTOU
+      // ======================================
+
       if (connection === "close") {
 
         console.log("❌ WHATSAPP DESCONECTADO");
 
-        statusGlobal = "offline";
+        statusGlobal = "disconnected";
 
         const shouldReconnect =
           lastDisconnect?.error?.output?.statusCode !==
@@ -125,21 +134,82 @@ async function startWhatsApp() {
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
-      const msg = messages[0];
+      try {
 
-      if (!msg.message) return;
+        const msg = messages[0];
 
-      const numero =
-        msg.key.remoteJid;
+        if (!msg.message) return;
 
-      const texto =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        "";
+        // IGNORAR MENSAGENS PRÓPRIAS
+        if (msg.key.fromMe) return;
 
-      console.log("📩 NOVA MENSAGEM");
-      console.log(numero);
-      console.log(texto);
+        const numero =
+          msg.key.remoteJid;
+
+        const texto =
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          "";
+
+        if (!texto) return;
+
+        console.log("📩 NOVA MENSAGEM");
+        console.log(numero);
+        console.log(texto);
+
+        // ======================================
+        // ENVIAR PARA IA
+        // ======================================
+
+        const response = await fetch(
+          "https://zapbridge.onrender.com/webhook",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              nome: numero,
+              mensagem: texto
+            })
+          }
+        );
+
+        const data = await response.json();
+
+        console.log("🤖 RESPOSTA IA:");
+        console.log(data);
+
+        const resposta =
+          data?.resposta;
+
+        if (!resposta) {
+
+          console.log("❌ IA NÃO RETORNOU RESPOSTA");
+
+          return;
+
+        }
+
+        // ======================================
+        // RESPONDER WHATSAPP
+        // ======================================
+
+        await sock.sendMessage(
+          numero,
+          {
+            text: resposta
+          }
+        );
+
+        console.log("✅ RESPOSTA ENVIADA");
+
+      } catch (err) {
+
+        console.log("❌ ERRO AUTOMAÇÃO");
+        console.log(err);
+
+      }
 
     });
 
@@ -166,7 +236,7 @@ startWhatsApp();
 
 app.get("/", (req, res) => {
 
-  res.send("ZapBridge Engine Online");
+  res.send("ZapBridge Engine Online 🚀");
 
 });
 
@@ -214,6 +284,16 @@ app.post("/send", async (req, res) => {
         status: "erro",
         mensagem:
           "Número e mensagem obrigatórios"
+      });
+
+    }
+
+    if (!sock) {
+
+      return res.status(500).json({
+        status: "erro",
+        mensagem:
+          "WhatsApp não conectado"
       });
 
     }
